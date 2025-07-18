@@ -1,0 +1,239 @@
+import pandas as pd
+import os
+from glob import glob
+import openpyxl
+
+def is_level_1or2(code):
+    """
+    判断科目代码是否为一级或二级科目（以'1'开头，长度<=6位，排除小数点）。
+    """
+    try:
+        code_str = str(code).strip('.')
+        return code_str.startswith('1') and len(code_str.replace('.', '')) <= 6
+    except:
+        return False
+
+def is_level_123(code):
+    """
+    判断科目代码是否为一级、二级或以'.01'结尾的三级科目（以'3'开头）。
+    """
+    try:
+        code_str = str(code).strip()
+        if not code_str.startswith('3'):
+            return False
+        dot_count = code_str.count('.')
+        if dot_count == 0 and len(code_str) == 4:
+            return True  # 一级
+        elif dot_count == 1 and len(code_str) == 7:
+            return True  # 二级
+        elif dot_count == 2 and code_str.endswith('.01'):
+            return True  # 三级以.01结尾
+        else:
+            return False
+    except:
+        return False
+
+
+
+def process_fund_data(input_file):
+    required_columns = ['科目代码', '科目名称', '市值-本币', '市值占比', '估值增值-本币', '停牌信息']
+
+    # 1. 读取前5行，提取日期和单位净值
+    header_info = pd.read_excel(input_file, sheet_name='Sheet1', header=None, nrows=5, engine='openpyxl')
+    date_ = None
+    unit_net_value = None
+
+    for _, row in header_info.iterrows():
+        row_str = ' '.join(row.dropna().astype(str).values)
+        if '日期' in row_str and date_ is None:
+            date_ = '日期' + row_str.split('日期')[-1].replace('：', '').strip().split()[0]
+        if '单位净值' in row_str and unit_net_value is None:
+            unit_net_value = '单位净值' + row_str.split('单位净值')[-1].replace('：', '').strip().split()[0]
+
+    # 2. 读取全部数据（header=4），去掉前3行（即原表第6~8行）
+    df_full = pd.read_excel(input_file, sheet_name='Sheet1', header=4, engine='openpyxl')
+    df = df_full.iloc[3:].reset_index(drop=True)
+
+    # 筛选需要的列，若列缺失则填充空值
+    available_columns = [col for col in required_columns if col in df.columns]
+    df = df[available_columns].copy()
+    for col in required_columns:
+        if col not in df.columns:
+            df[col] = pd.NA  
+    df = df[required_columns]  
+
+    # 3. Step 1: 筛选以“1”开头的一级或二级科目
+    df1 = df[df['科目代码'].apply(is_level_1or2)].copy()
+
+    # 4. Step 2: 从“3102”行开始，筛选以“3”开头的一级、二级或以“.01”结尾的三级科目
+    start_idx = df.index[df['科目代码'] == '3102'].tolist()
+    if start_idx:
+        start_idx = start_idx[0]
+        df2 = df.iloc[start_idx:].copy()
+        df2 = df2[df2['科目代码'].apply(is_level_123)]
+    else:
+        df2 = pd.DataFrame(columns=required_columns)  
+
+    # 5. Step 3: 遍历表格第一列（科目代码），如含有关键词则提取“市值占比”列的数据，并输出匹配的关键词
+    keyword_list = [
+        '基金投资合计', '其中股票投资', '其中其他衍生工具投资', '其中基金投资',
+        '流通股票投资合计', '其中上海流通股票', '其中深圳流通股票',
+        '其中深圳创业板流通股票', '期货账户保证金占用合计'
+    ]
+    df3_rows = []
+
+    for _, row in df.iterrows():
+        cell_value = str(row[required_columns[0]]) if pd.notna(row[required_columns[0]]) else ''
+        matched_keywords = [kw for kw in keyword_list if kw in cell_value]
+        if matched_keywords:
+            result_row = {
+                '科目代码': cell_value,
+                '市值占比': row.get('市值占比', pd.NA),
+                '匹配关键词': ','.join(matched_keywords)
+            }
+            for col in required_columns:
+                if col not in result_row:
+                    result_row[col] = ''
+            df3_rows.append(result_row)
+    if df3_rows:
+        df3 = pd.DataFrame(df3_rows)[required_columns + ['匹配关键词']]
+    else:
+        df3 = pd.DataFrame(columns=required_columns + ['匹配关键词'])
+    
+    
+    # 6. 合并三部分数据
+    data_part = pd.concat([df1, df2, df3], ignore_index=True)
+
+    # 7. 构建输出：第一行（文件名、日期、单位净值），第二行（表头），之后是数据
+    final_output = []
+    metadata_row = pd.DataFrame([[os.path.basename(input_file), date_, unit_net_value] + [''] * (len(required_columns) - 3)], 
+                                columns=required_columns)
+    final_output.append(metadata_row)
+    final_output.append(pd.DataFrame([required_columns], columns=required_columns))  # 表头
+    final_output.append(data_part[required_columns])  # 数据
+    final_output.append(pd.DataFrame([[''] * len(required_columns)], columns=required_columns))  # 空行
+
+    return pd.concat(final_output, ignore_index=True)
+
+
+def extract_data_from_blocks(filename):
+    if not os.path.isfile(filename):
+        print(f"文件不存在: {filename}")
+        return
+
+    wb = openpyxl.load_workbook(filename)
+    ws = wb.active
+    new_sheet_name = "汇总数据"
+
+    if new_sheet_name in wb.sheetnames:
+        wb.remove(wb[new_sheet_name])
+    ws_new = wb.create_sheet(new_sheet_name)
+
+    headers = [
+        "日期",
+        "中金所投机买方 国债期货成本：市值-本币",
+        "上期所投机买方 商品成本: 市值-本币",
+        "中金所投机买方 国债期货成本: 市值占比",
+        "上期所投机买方 商品成本: 市值占比",
+        "交易性股票投资: 市值-本币",
+        "交易性股票投资: 市值占比",
+    ]
+    ws_new.append(headers)
+
+    max_row = ws.max_row
+    max_col = ws.max_column
+
+    # 先找所有日期所在行和日期字符串
+    date_positions = []
+    for r in range(1, max_row+1):
+        for c in range(1, max_col+1):
+            val = ws.cell(row=r, column=c).value
+            if isinstance(val, str) and val.startswith("日期"):
+                date_str = val.replace("日期：", "").replace("日期:", "").replace("日期", "").strip()
+                date_positions.append((r, date_str))
+                break
+            
+    # 遍历每个日期区块
+    for i, (date_row, date_str) in enumerate(date_positions):
+        # 确定该日期区块的结束行（下一个日期行的上一行，或者表尾）
+        end_row = date_positions[i+1][0] - 1 if i + 1 < len(date_positions) else max_row
+
+        # 找表头行（一般紧跟日期行下一行）
+        header_row = date_row + 1
+
+        # 找列索引：科目名称、市值-本币、市值占比
+        col_subject = None
+        col_value = None
+        col_ratio = None
+
+        for c in range(1, max_col+1):
+            header_val = ws.cell(row=header_row, column=c).value
+            if header_val == "科目名称":
+                col_subject = c
+            elif header_val == "市值-本币":
+                col_value = c
+            elif header_val == "市值占比":
+                col_ratio = c
+
+        if None in (col_subject, col_value, col_ratio):
+            print(f"日期 {date_str} 的数据块缺少必要表头列，跳过")
+            continue
+
+        # 在区块内寻找目标科目名称
+        # 初始化结果为None
+        zjs_value = None
+        zjs_ratio = None
+        sqs_value = None
+        sqs_ratio = None
+        gp_value = None
+        gp_ratio = None
+
+        for r in range(header_row + 1, end_row + 1):
+            subject = ws.cell(row=r, column=col_subject).value
+            if subject == "中金所_投机_买方_国债期货_成本":
+                zjs_value = ws.cell(row=r, column=col_value).value
+                zjs_ratio = ws.cell(row=r, column=col_ratio).value
+            elif subject == "上期所_投机_买方_商品_成本":
+                sqs_value = ws.cell(row=r, column=col_value).value
+                sqs_ratio = ws.cell(row=r, column=col_ratio).value
+            elif subject == "交易性股票投资":
+                gp_value = ws.cell(row=r, column=col_value).value
+                gp_ratio = ws.cell(row=r, column=col_ratio).value
+
+        # 写入新sheet
+        ws_new.append([date_str, zjs_value, sqs_value, zjs_ratio, sqs_ratio, gp_value, gp_ratio])
+
+    wb.save(filename)
+    print(f"提取完成，数据写入新sheet：{new_sheet_name}")
+
+
+if __name__ == "__main__":
+    folder = r"C:\Users\TQY\Desktop\批量下载"
+    output_file = r'C:\Users\TQY\Desktop\估值表数据整理3.0.xlsx'
+    file_pattern = os.path.join(folder, '*.xlsx')
+
+    files = [f for f in glob(file_pattern)
+             if not os.path.basename(f).startswith('~$') and not f.endswith('整理数据.xlsx')]
+
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+
+    all_data = []
+    for file in files:
+        try:
+            df = process_fund_data(file)
+            all_data.append(df)
+            print(f"已处理文件: {file}")
+        except Exception as e:
+            print(f"{file} 处理失败: {e}")
+            
+    if all_data:
+        final_df = pd.concat(all_data, ignore_index=True)
+        final_df.to_excel(output_file, index=False, header=False)
+        print(f"所有文件已处理并输出到：{output_file}")
+    else:
+        print("没有成功处理的文件。")
+
+    extract_data_from_blocks(output_file)
+
+
+
