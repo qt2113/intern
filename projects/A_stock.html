@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="UTF-8">
+  <title>📈 A股股票股东结构比例分析</title>
+  <link rel="stylesheet" href="../style.css">
+  <style>
+    body {
+      font-family: sans-serif;
+      padding: 40px;
+      max-width: 900px;
+      margin: auto;
+    }
+    h1 {
+      color: #2c3e50;
+    }
+    pre {
+      background: #f4f4f4;
+      padding: 15px;
+      overflow-x: auto;
+      border-left: 4px solid #2980b9;
+    }
+    code {
+      font-family: monospace;
+    }
+    a {
+      color: #2980b9;
+      text-decoration: none;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+  </style>
+</head>
+<body>
+  <h1>📈 A股股票股东结构比例分析</h1>
+  <p>本模块旨在基于Wind导出的数据，分析2024年与2025年市值30亿元以下A股公司中，前十大流通股东的机构、产品、自然人三类持股比例变化。通过Python脚本自动分类股东类型，批量统计，最后使用Excel内置函数计算出结构占比结果，用于观察持股趋势变化。</p>
+
+  <h2>操作流程</h2>
+  <ol>
+    <li><b>数据导出与整理</b>
+      <dt>- 通过Wind终端分别导出2024年与2025年时点市值不超过30亿元的A股公司数据，字段包括：证券代码、证券简称、流通市值；前十大流通股东名称及其对应持股比例；</dt>  
+      <dt>- 筛选两期数据中证券代码交集部分，确保分析对象为两个时间点均存在的公司，合并为统一格式表格以供后续处理。</dt>
+    </li>
+
+    <li><b>股东分类与统计</b>
+      <dt>- 自定义 classify_holder 函数，将前十大股东名称分为三类：</dt>  
+        <dd>- 机构类：包括各类公司、基金管理人、银行、信托等；</dd>
+        <dd>- 产品类：包括各类基金、资管计划、信托产品、ETF等；</dd>
+        <dd>- 自然人类：中文人名或不符合以上两类的主体；</dd>
+      <dt>- 用python脚本遍历每家公司前十大股东，识别类别后按持股比例统计：</dt>  
+        <dd>- 输出每家公司三类股东占比、总占比、流通市值等字段；</dd>
+        <dd>- 支持批量处理并输出为Excel文件</dd>
+    </li>
+
+    <li><b>结果输出</b>
+      <dt>- 生成包含证券代码、简称、流通市值、三类股东占比等字段的Excel文件；</dt>  
+      <dt>- 支持写入多个sheet，便于不同年份横向对比;</dt>
+      <dt>- 配合Excel进行占比变化计算与分析</dt>
+    </li>
+  </ol>
+
+  <h2>📄 Python 源代码</h2>
+
+  <h3>股东对比.py</h3>
+    <details>
+        <summary>点击展开/折叠代码</summary>
+        <div style="position: relative;">
+            <button onclick="copyCode(this)" style="position: absolute; top: 8px; right: 8px; z-index: 2; font-size: 12px; padding: 2px 8px; cursor: pointer;">复制代码</button>
+            <pre><code>
+    <!-- 替换为实际文件内容 -->
+    import pandas as pd
+    import re
+    from openpyxl import load_workbook
+
+    # --- 股东分类函数 ---
+    def classify_holder(name):
+        if pd.isna(name):
+            return '未知'
+
+        name = str(name).strip()
+        name_cn = name  # 中文原样
+        name_en = name  # 英文检查时处理
+
+        # --- 1. 判断产品 ---
+        product_keywords = [
+            '基金', '资管', '理财', '专户', '计划', '组合', '产品', '契约型',
+            '集合资金信托', '集合资产管理计划', '养老金产品', '保险产品', '封闭式基金',
+            '集合计划', '资产支持证券', '信托计划', '投资基金', '创业投资', '私募股权','自有资金','ETF','FUND','L.P.','LP'
+        ]
+        if any(k in name_cn for k in product_keywords):
+            # 防止“基金管理有限公司”被错判成产品
+            institution_suffixes = [
+                '投资有限公司', '管理有限公司', '有限公司', '资产管理有限公司', '资产管理公司',
+                '基金管理公司', '信托公司', '证券公司', '银行', '财务公司', '保险',
+                '资本', '创投', '集团', '国资', '基金管理人', '有限合伙',
+                '合伙企业', '事务所', '账户', '发展中心'
+            ]
+            if not any(name_cn.endswith(suffix) for suffix in institution_suffixes):
+                return '产品'
+
+        # --- 2. 判断机构（中文） ---
+        institution_keywords = [
+            '投资有限公司', '管理有限公司', '有限公司', '资产管理有限公司', '资产管理公司',
+            '基金管理公司', '信托公司', '证券公司', '银行', '财务公司', '保险',
+            '资本', '创投', '集团', '国资', '基金管理人', '有限合伙', '合伙企业','管理中心','株式会社','大学','社','农场','管理处',
+            '事务所', '账户', '发展中心','公司','管理站','财政局','财政厅','办公室','研究所','科学院','研究院','中心','委员会','医院','投资局','制药厂'
+        ]
+        if any(name_cn.endswith(k) or k in name_cn for k in institution_keywords):
+            return '机构'
+
+        # --- 3. 判断英文机构 ---
+        english_institution_keywords = [
+            'BANK', 'SECURITIES', 'TRUST', 'INVESTMENT', 'ASSETMANAGEMENT', 'LIMITED', 'LIMITED.', 'INCORPORATED', 'INCORPORATED.', 'INTERNATIONAL', 'LIMITSD'
+        ]
+        english_suffixes = [
+            'LTD', 'INC', 'LLC', 'CO.,LTD.', 'PLC', 'INC.', 'PLC.', 'CORP.', 'BHD.', 'LTD.','CORPORATION', 'COMPANY', 'BANKING','INCORPORATED', 'SA', 'AG', 'ED'
+        ]
+        well_known_institutions = [
+            'UBS AG', 'MORGAN STANLEY', 'JPMORGAN CHASE BANK N.A.',
+            'GOLDMAN SACHS', 'HSBC', 'CREDIT SUISSE', 'CITI','SA','AG'
+        ]
+        # 统一处理英文名，去除空格和大小写
+        name_en_upper = name_en.upper().replace(' ', '')
+        # 检查英文机构关键词和后缀（忽略空格和大小写）
+        if (any(k in name_en_upper for k in english_institution_keywords)
+            or any(name_en_upper.endswith(s.replace(' ', '')) for s in english_suffixes)
+            or any(name_en_upper.endswith(w.replace(' ', '')) for w in well_known_institutions)
+            or name_en_upper in (w.upper().replace(' ', '') for w in well_known_institutions)):
+            return '机构'
+
+        # --- 4. 判断自然人（仅中文 2~4 个汉字） ---
+        if re.fullmatch(r'[\u4e00-\u9fa5]{2,4}', name_cn):
+            return '自然人'
+
+        # --- 5. 默认兜底 ---
+        return '自然人'
+
+
+    # --- 主函数 ---
+    def analyze_shareholders(filepath):
+        df = pd.read_excel(filepath, engine='openpyxl')
+
+        # 基础列识别（自动提取）
+        code_col = '证券代码'
+        name_col = '证券简称'
+        mkt_cap_col = [col for col in df.columns if '流通市值' in col][0]
+
+        result_rows = []
+
+        for _, row in df.iterrows():
+            code = row[code_col]
+            stock_name = row[name_col]
+            try:
+                mkt_cap = float(str(row[mkt_cap_col]).replace(',', '').strip())
+            except:
+                mkt_cap = None
+
+            total_ratio = {'机构': 0.0, '产品': 0.0, '自然人': 0.0}
+
+            for i in range(1, 11):
+                try:
+                    holder_name_col = [col for col in df.columns if f'排名] 第{i}名' in col and '名称' in col][0]
+                    holder_ratio_col = [col for col in df.columns if f'排名] 第{i}名' in col and '比例' in col][0]
+                    holder_name = row[holder_name_col]
+                    ratio = row[holder_ratio_col]
+
+                    holder_type = classify_holder(holder_name)
+                    try:
+                        ratio_val = float(str(ratio).replace('%', '').replace(',', '').strip())
+                    except:
+                        ratio_val = 0.0
+                    if holder_type in total_ratio:
+                        total_ratio[holder_type] += ratio_val
+                except:
+                    continue
+
+            total_sum = sum(total_ratio.values())
+            result_rows.append({
+                '证券代码': code,
+                '证券简称': stock_name,
+                '流通市值': mkt_cap,
+                '机构占比': round(total_ratio['机构'], 4),
+                '产品占比': round(total_ratio['产品'], 4),
+                '自然人占比': round(total_ratio['自然人'], 4),
+                '前十大股东总占比': round(total_sum, 4)
+            })
+
+        result_df = pd.DataFrame(result_rows)
+        return result_df
+
+    # --- 使用示例（输入路径 & 输出路径） ---
+    input_path = r"C:\Users\TQY\Desktop\全部A股-20240630-前10名股东.xlsx"  # 修改为你的文件路径
+    output_path = r'C:\Users\TQY\Desktop\每股股东类型占比结果.xlsx'  # 输出结果路径
+    sheet_name = '股东类型占比'  # 新建的sheet名称
+
+    output_df = analyze_shareholders(input_path)
+
+
+    try:
+        # 如果文件已存在，追加新sheet
+        with pd.ExcelWriter(output_path, engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
+            output_df.to_excel(writer, index=False, sheet_name=sheet_name)
+    except FileNotFoundError:
+        # 文件不存在则新建
+        with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
+            output_df.to_excel(writer, index=False, sheet_name=sheet_name)
+
+    print(f"统计完成！结果已保存为：{output_path}，Sheet名为：{sheet_name}")
+            </code></pre>
+        </div>
+    </details>
+    <script>
+    function copyCode(btn) {
+            const pre = btn.parentElement.querySelector('pre code');
+            let text = pre.innerText;
+            // Remove leading/trailing empty lines
+            text = text.replace(/^\s*\n/, '').replace(/\n\s*$/, '');
+            // Create a temporary textarea to copy
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            try {
+                    document.execCommand('copy');
+                    btn.textContent = '已复制!';
+                    setTimeout(() => { btn.textContent = '复制代码'; }, 1200);
+            } catch (e) {
+                    btn.textContent = '复制失败';
+            }
+            document.body.removeChild(textarea);
+    }
+    </script>
+
+
+  <h2>📥 附件下载</h2>
+  <ul>
+    <li><a href="../assets/A_stock/A_stock_20240630_top10.xlsx" download>全部A股-20240630-前10名股东.xlsx</a></li>
+    <li><a href="../assets/A_stock/A_stock_20250708_top10.xlsx" download>全部A股-20250708-前10名股东.xlsx</a></li>
+    <li><a href="../assets/A_stock/result.xlsx" download>每股股东类型占比结果 .xlsx</a></li>
+  </ul>
+
+  <p><a href="../intern_website.html">← 返回主页</a></p>
+</body>
+</html>
