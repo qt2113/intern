@@ -25,6 +25,17 @@
       text-decoration: underline;
     }
   </style>
+  <script>
+    function checkpsswd(){
+      var psswd = prompt("我的生日是?");
+      if (psswd === "20060609") {
+        window.location.href = "projects/personal_space.html";
+      }
+      else{
+        alert("密码错误，无法进入个人空间！");
+      }
+    }
+  </script>
 </head>
 <body>
   <h1>实习项目主页</h1>
@@ -35,7 +46,8 @@
     <!-- <li><a href="projects/vba_fix.html">🧩 VBA宏修复</a></li> -->
     <li><a href="projects/A_stock.html">📈 A股股票股东结构比例分析</a></li> 
     <li><a href="projects/net_value_check.html">🔍 净值异常数据检测系统</a></li>
-    <li><a href = "projects/personal_space.html">👻个人空间</a></li>
+    <!--<li><a href = "projects/personal_space.html">👻个人空间</a></li> -->
+    <li><a href = "javascript:void(0);" onclick = "checkpsswd()">👻个人空间</a></li>
   </ul>
 </body>
 </html>
